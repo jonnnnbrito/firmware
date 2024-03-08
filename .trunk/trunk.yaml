@@ -1,4 +1,4 @@
-version: 0.1
+IOversion: 0.1
 cli:
   version: 1.20.1
 plugins:
