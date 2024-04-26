@@ -42,6 +42,7 @@ class FloodingRouter : public Router, protected PacketHistory
      * If the txmit queue is full it might return an error
      */
     virtual ErrorCode send(meshtastic_MeshPacket *p) override;
+    virtual bool shouldFilterReceived(const meshtastic_MeshPacket *p) override;
 
   protected:
     /**
@@ -50,7 +51,7 @@ class FloodingRouter : public Router, protected PacketHistory
      * Called immediately on reception, before any further processing.
      * @return true to abandon the packet
      */
-    virtual bool shouldFilterReceived(const meshtastic_MeshPacket *p) override;
+    
 
     /**
      * Look for broadcasts we need to rebroadcast

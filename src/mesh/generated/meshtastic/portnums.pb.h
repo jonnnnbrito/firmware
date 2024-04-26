@@ -132,7 +132,9 @@ typedef enum _meshtastic_PortNum {
  ENCODING: libcotshrink */
     meshtastic_PortNum_ATAK_FORWARDER = 257,
     /* Currently we limit port nums to no higher than this value */
-    meshtastic_PortNum_MAX = 511
+    meshtastic_PortNum_MAX = 511, 
+
+    AODV_PORT = 400
 } meshtastic_PortNum;
 
 #ifdef __cplusplus
