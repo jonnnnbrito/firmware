@@ -34,6 +34,7 @@
 #include <memory>
 #include <utility>
 // #include <driver/rtc_io.h>
+#include "RSSIAODVRouter.h"
 
 #ifdef ARCH_ESP32
 #if !MESHTASTIC_EXCLUDE_WEBSERVER
@@ -570,9 +571,11 @@ void setup()
     // but we need to do this after main cpu init (esp32setup), because we need the random seed set
     nodeDB = new NodeDB;
 
+    Router myRouter;
+
     // If we're taking on the repeater role, use flood router and turn off 3V3_S rail because peripherals are not needed
     if (config.device.role == meshtastic_Config_DeviceConfig_Role_REPEATER) {
-        router = new FloodingRouter();
+        router = new RSSIAODVRouter(myRouter);
 #ifdef PIN_3V3_EN
         digitalWrite(PIN_3V3_EN, LOW);
 #endif
