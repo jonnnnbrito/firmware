@@ -2,9 +2,19 @@
 #define RSSIAODVROUTER_H
 
 #include <mesh-pb-constants.h> 
-#include <unordered_map>
-#include "MeshTypes.h"
+#include <unordered_map> 
 #include <RadioLib.h>
+#include "FloodingRouter.h"
+#include "Router.h"
+#include <modules/SX126x/SX126x.h>
+#include <cstring>
+#include <iterator>
+#include <optional> 
+#include "NodeDB.h"
+#include "MeshTypes.h"
+#include "mesh/generated/meshtastic/mesh.pb.h"
+#include "ReliableRouter.h"
+#include "meshtastic/portnums.pb.h"
 
 // Port number definitions
 const uint16_t RSSI_BEACON_PORT = 300; // Or your preferred port number
@@ -12,9 +22,9 @@ const uint16_t AODV_PORT_NUM     = 400; // Or your preferred port number
 const uint32_t ROUTE_EXPIRY_TIME_MS = 30000;
 const int8_t RSSI_THRESHOLD = -80;
 
-std::unordered_set<uint32_t> seen_rreq_ids;
-std::unordered_map<NodeNum, meshtastic_MeshPacket> packetStore; 
-std::unordered_map<NodeNum, uint32_t> rreq_sequence_numbers; 
+extern std::unordered_set<uint32_t> seen_rreq_ids;
+extern std::unordered_map<NodeNum, meshtastic_MeshPacket> packetStore; 
+extern std::unordered_map<NodeNum, uint32_t> rreq_sequence_numbers; 
 
 // Data structure for Neighbor RSSI
 struct NeighborRSSI {
@@ -66,12 +76,14 @@ struct DataPacket {
 RREQPacket deserializeRREQ(const meshtastic_MeshPacket *p);
 RREPPacket deserializeRREP(const meshtastic_MeshPacket *p);
 
-class RSSIAODVRouter {
+class RSSIAODVRouter : public Router {
 public:
-    RSSIAODVRouter(Router& router) : router(router) {}
+
+    RSSIAODVRouter(Router& router);
+    
     FloodingRouter floodingRouter; // Or FloodingRouter* floodingRouter;
 
-    void updateNeighborRSSI(NodeNum neighbor_id, int8_t neighbor_rssi);
+    void updateNeighborRSSI(NodeNum neighbor_id, int8_t neighbor_rssi, const meshtastic_MeshPacket *p);
 
     void handleRREQ(const meshtastic_MeshPacket *p);
 
@@ -101,10 +113,6 @@ public:
 
     void updateRouteTable(const RREPPacket &rrep, bool invalidate);
 
-    void updateRouteTable(const RREQPacket &rreq, bool invalidate);
-
-    bool isRREQSeen(uint32_t broadcast_id);
-
     void rebroadcastRREQ(RREQPacket &rreq);
 
     void forwardRREP(const RREPPacket &rrep, NodeNum next_hop);
@@ -117,16 +125,14 @@ public:
 
     bool shouldFilterReceived(const meshtastic_MeshPacket *p);
 
-    void sendRSSIBeacon(); 
-    void handleRSSIBeacon(const meshtastic_MeshPacket *p); 
+    void sendRSSIBeacon();
+    void manageBeacons();
+    uint8_t *serializeRSSI(int8_t rssi);
+    void handleRSSIBeacon(const meshtastic_MeshPacket *p);
+
+    int8_t deserializeRSSI(const uint8_t *payload);
 
     Router& router;
-
-    RSSIAODVRouter(Router& router) : router(router) {} 
-
-
-    std::unordered_set<uint32_t> seen_rreq_ids; 
-
 
     bool isRREQSeen(uint32_t broadcast_id) {
         return seen_rreq_ids.find(broadcast_id) != seen_rreq_ids.end(); 
@@ -136,13 +142,14 @@ public:
         seen_rreq_ids.insert(broadcast_id);
     }
 
-    std::unordered_set<uint32_t> seen_rreq_ids;
-
 private: 
     std::unordered_map<NodeNum, RouteEntry> routing_table;
-    
+    unsigned long nextBeaconTime; // Declare nextBeaconTime here
+    std::unordered_map<NodeNum, NeighborRSSI> neighbor_rssi_table;
 
     // ... You might add other AODV-related methods here as needed ...
 };
 
 #endif // RSSIAODVROUTER_H
+
+

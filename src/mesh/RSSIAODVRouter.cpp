@@ -8,18 +8,38 @@
 #include <cstring>
 #include <iterator>
 #include <optional> 
+#include "NodeDB.h"
+#include "MeshTypes.h"
+#include "mesh/generated/meshtastic/mesh.pb.h"
+#include "ReliableRouter.h"
+#include "meshtastic/portnums.pb.h"
+
+#define RSSI_BEACON_PORT 300
+
 
 // Global Variables
-std::unordered_map<uint32_t, NeighborRSSI> neighbor_rssi_table; 
-std::unordered_map<NodeNum, meshtastic_MeshPacket> my_packet_store; 
+std::unordered_set<uint32_t> seen_rreq_ids;
+std::unordered_map<NodeNum, meshtastic_MeshPacket> packetStore; 
+std::unordered_map<NodeNum, uint32_t> rreq_sequence_numbers; 
+
+const unsigned long BEACON_INTERVAL = 10000; // 10 seconds in milliseconds
+
+RSSIAODVRouter::RSSIAODVRouter(Router& router) :
+    router(router) {}
 
 // RSSIAODVRouter Class Implementation
 NodeNum RSSIAODVRouter::getNodeNum() {
     return nodeDB->getNodeNum(); // Assuming you have access to a nodeDB object
 }
 
-void RSSIAODVRouter::updateNeighborRSSI(NodeNum neighbor_id, int8_t neighbor_rssi) {
+void RSSIAODVRouter::updateNeighborRSSI(NodeNum neighbor_id, int8_t neighbor_rssi, const meshtastic_MeshPacket *p) {
     uint32_t now = millis(); // Or a more accurate timestamp 
+
+    // 1. Packet Validation
+    if (p == nullptr) { 
+        LOG_ERROR("Null packet pointer in updateNeighborRSSI");
+        return; 
+    }    
 
     // Check if neighbor exists in the table
     auto it = neighbor_rssi_table.find(neighbor_id);
@@ -39,6 +59,7 @@ void RSSIAODVRouter::updateNeighborRSSI(NodeNum neighbor_id, int8_t neighbor_rss
         neighbor_rssi_table[neighbor_id] = entry;
     }
 
+
     // Expiration Logic (Example):
     const uint32_t EXPIRATION_TIMEOUT = 5000; // 5 seconds
     for (auto it = neighbor_rssi_table.begin(); it != neighbor_rssi_table.end(); /* */) {
@@ -48,6 +69,10 @@ void RSSIAODVRouter::updateNeighborRSSI(NodeNum neighbor_id, int8_t neighbor_rss
             ++it;
         }
     }
+
+    // ***Integration Point***
+    // Integration of handleNewPacket (now the 'packet' is defined)
+    handleNewPacket(*p);     
 }
 
 bool RSSIAODVRouter::shouldFilterReceived(const meshtastic_MeshPacket *p) {
@@ -79,6 +104,22 @@ bool RSSIAODVRouter::shouldFilterReceived(const meshtastic_MeshPacket *p) {
         // Fallback to flooding-based logic for other packets
         return floodingRouter.shouldFilterReceived(p); // Use your instance
     }
+}
+
+uint32_t extractUint32(const uint8_t* bytes, size_t offset) {
+    return (uint32_t(bytes[offset]) << 24) |
+           (uint32_t(bytes[offset + 1]) << 16) | 
+           (uint32_t(bytes[offset + 2]) << 8) | 
+           uint32_t(bytes[offset + 3]); 
+}
+
+// Helper function to extract an int8_t
+int8_t extractInt8(const uint8_t* bytes, size_t offset) {
+    return int8_t(bytes[offset]);
+}
+
+uint8_t extractUint8(const uint8_t* bytes, size_t offset) {
+    return bytes[offset]; 
 }
 
 
@@ -150,20 +191,23 @@ void RSSIAODVRouter::handleRREQ(const meshtastic_MeshPacket *p) {
             ++it;
         }
     }
+
+    // Integration Point 
+    handleNewPacket(*p); 
 }
 
 void RSSIAODVRouter::handleRREP(const meshtastic_MeshPacket *p) {
-    // 1. Extract RREP fields from the packet
+    // 1. Extract RREP fields from the packet: 
     RREPPacket rrep = deserializeRREP(p); 
 
-    // 2. Update your routing table with the route information 
-    updateRouteTable(rrep);  // Implement this function
+    // 2. Update your routing table with the route information:
+    updateRouteTable(rrep, false); 
 
-    // 3. Forward the RREP towards the original source (if necessary)
+    // 3. Forward the RREP towards the original source (if necessary):
     if (rrep.destination_node != getNodeNum()) { 
-        // Look up the next hop in your routing table
+        // Look up the next hop in your routing table:
         NodeNum next_hop = lookupNextHop(rrep.destination_node); 
-        if (next_hop != 0) { // 0 might indicate invalid next hop
+        if (next_hop != 0) { // 0 might indicate an invalid next hop
             if (p->hop_limit > 0) {
                 meshtastic_MeshPacket p_copy = *p;  // Create a copy of the packet
                 p_copy.hop_limit--; 
@@ -171,6 +215,9 @@ void RSSIAODVRouter::handleRREP(const meshtastic_MeshPacket *p) {
             } 
         }
     }
+
+    // Integration Point (Optional):
+    handleNewPacket(*p); 
 }
 
 
@@ -181,81 +228,101 @@ void RSSIAODVRouter::handleRREP(const meshtastic_MeshPacket *p) {
 //*************************************************************************
 
 RREQPacket deserializeRREQ(const meshtastic_MeshPacket *p) {
-    RREQPacket rreq;
+    
+    RREQPacket defaultRREQ; // Initialized with default values
+
+    // Initialize individual members with sensible defaults:
+    defaultRREQ.source_node = 0; // Assuming 0 might indicate an invalid source
+    defaultRREQ.destination_node = 0; // Assuming 0 might indicate an invalid destination
+    defaultRREQ.broadcast_id = 0; 
+    defaultRREQ.route_request_id = 0; 
+    defaultRREQ.hop_count = 0; // Or a value indicating an 'unknown' hop count
+    defaultRREQ.rssi = -120; // Or a very low RSSI to indicate an invalid value 
+    defaultRREQ.packet_type = 0; // Assuming 0 is not a valid packet type
+    defaultRREQ.sequence_number = 0; 
     
     // Packet Size Check
     if (p->decoded.payload.size < sizeof(RREQPacket)) { 
         LOG_ERROR("RREQ packet is too short for deserialization");
-        RREQPacket defaultRREQ; // Create a default or 'empty' RREQPacket
         return defaultRREQ; 
-    } else {
-        const uint8_t* payload = p->decoded.payload.bytes; 
-        size_t offset = 0; 
+    } 
 
-        memcpy(&rreq.source_node, payload + offset, sizeof(rreq.source_node));
-        offset += sizeof(rreq.source_node);
+    RREQPacket rreq;
+    const uint8_t* payload = p->decoded.payload.bytes; 
+    size_t offset = 0; 
 
-        memcpy(&rreq.destination_node, payload + offset, sizeof(rreq.destination_node));
-        offset += sizeof(rreq.destination_node);
+    memcpy(&rreq.source_node, payload + offset, sizeof(rreq.source_node));
+    offset += sizeof(rreq.source_node);
 
-        memcpy(&rreq.broadcast_id, payload + offset, sizeof(rreq.broadcast_id));
-        offset += sizeof(rreq.broadcast_id);
+    memcpy(&rreq.destination_node, payload + offset, sizeof(rreq.destination_node));
+    offset += sizeof(rreq.destination_node);
 
-        memcpy(&rreq.route_request_id, payload + offset, sizeof(rreq.route_request_id));
-        offset += sizeof(rreq.route_request_id);
+    memcpy(&rreq.broadcast_id, payload + offset, sizeof(rreq.broadcast_id));
+    offset += sizeof(rreq.broadcast_id);
 
-        memcpy(&rreq.hop_count, payload + offset, sizeof(rreq.hop_count));
-        offset += sizeof(rreq.hop_count);
+    memcpy(&rreq.route_request_id, payload + offset, sizeof(rreq.route_request_id));
+    offset += sizeof(rreq.route_request_id);
 
-        memcpy(&rreq.rssi, payload + offset, sizeof(rreq.rssi));
-        offset += sizeof(rreq.rssi);
+    memcpy(&rreq.hop_count, payload + offset, sizeof(rreq.hop_count));
+    offset += sizeof(rreq.hop_count);
 
-        memcpy(&rreq.packet_type, payload + offset, sizeof(rreq.packet_type));
-        offset += sizeof(rreq.packet_type);       
+    memcpy(&rreq.rssi, payload + offset, sizeof(rreq.rssi));
+    offset += sizeof(rreq.rssi);
 
-        memcpy(&rreq.sequence_number, payload + offset, sizeof(rreq.sequence_number));
-        offset += sizeof(rreq.sequence_number);
-        
-    }
+    memcpy(&rreq.packet_type, payload + offset, sizeof(rreq.packet_type));
+    offset += sizeof(rreq.packet_type);       
+
+    memcpy(&rreq.sequence_number, payload + offset, sizeof(rreq.sequence_number));
+    offset += sizeof(rreq.sequence_number);
 
     return rreq;
-} 
+}
 
 RREPPacket deserializeRREP(const meshtastic_MeshPacket *p) {
-    RREPPacket rrep; 
+    RREPPacket defaultRREP; // Create a default RREPPacket
 
+    // Initialize individual members with sensible defaults:
+    defaultRREP.source_node = 0; // Assuming 0 might indicate an invalid source node
+    defaultRREP.destination_node = 0; // Assuming 0 might indicate an invalid destination node
+    defaultRREP.route_request_id = 0;  
+    defaultRREP.hop_count = UINT8_MAX; // Or a value indicating an unreachable destination 
+    defaultRREP.rssi = -120; // Or a very low RSSI to indicate an invalid value 
+    defaultRREP.packet_type = 0; // Assuming 0 is not a valid AODV packet type
+    defaultRREP.sequence_number = 0;
+    
     // Packet Size Check
     if (p->decoded.payload.size < sizeof(RREPPacket)) { 
         LOG_ERROR("RREP packet is too short for deserialization");
-        RREPPacket defaultRREP; // Create a default RREPPacket
         return defaultRREP; 
-    } else {
-        const uint8_t* payload = p->decoded.payload.bytes; 
-        size_t offset = 0; 
-
-        rrep.source_node = extractUint32(payload, offset); 
-        offset += sizeof(rrep.source_node);
-
-        rrep.destination_node = extractUint32(payload, offset); 
-        offset += sizeof(rrep.destination_node);
-
-        rrep.route_request_id = extractUint32(payload, offset); 
-        offset += sizeof(rrep.route_request_id);
-
-        rrep.hop_count = extractInt8(payload, offset); 
-        offset += sizeof(rrep.hop_count);
-
-        rrep.rssi = extractInt8(payload, offset); 
-        offset += sizeof(rrep.rssi);
-
-        rrep.packet_type = extractUint8(payload, offset); 
-        offset += sizeof(rrep.packet_type); 
-
-        rrep.sequence_number = extractUint32(payload, offset); 
-        offset += sizeof(rrep.sequence_number);
     }
 
+    RREPPacket rrep;
+    const uint8_t* payload = p->decoded.payload.bytes; 
+    size_t offset = 0; 
+
+    rrep.source_node = extractUint32(payload, offset); 
+    offset += sizeof(rrep.source_node);
+
+    rrep.destination_node = extractUint32(payload, offset); 
+    offset += sizeof(rrep.destination_node);
+
+    rrep.route_request_id = extractUint32(payload, offset); 
+    offset += sizeof(rrep.route_request_id);
+
+    rrep.hop_count = extractInt8(payload, offset); 
+    offset += sizeof(rrep.hop_count);
+
+    rrep.rssi = extractInt8(payload, offset); 
+    offset += sizeof(rrep.rssi);
+
+    rrep.packet_type = extractUint8(payload, offset); 
+    offset += sizeof(rrep.packet_type); 
+
+    rrep.sequence_number = extractUint32(payload, offset); 
+    offset += sizeof(rrep.sequence_number);
+    
     return rrep;
+
 }
 
 uint8_t* RSSIAODVRouter::serializeRREP(const RREPPacket &rrep) {
@@ -346,25 +413,9 @@ uint8_t* RSSIAODVRouter::serializeRREQ(const RREQPacket &rreq) {
 
 
 
-//*************************************************************************
-// Helper Functions
-//*************************************************************************
 
-uint32_t extractUint32(const uint8_t* bytes, size_t offset) {
-    return (uint32_t(bytes[offset]) << 24) |
-           (uint32_t(bytes[offset + 1]) << 16) | 
-           (uint32_t(bytes[offset + 2]) << 8) | 
-           uint32_t(bytes[offset + 3]); 
-}
 
-// Helper function to extract an int8_t
-int8_t extractInt8(const uint8_t* bytes, size_t offset) {
-    return int8_t(bytes[offset]);
-}
 
-uint8_t extractUint8(const uint8_t* bytes, size_t offset) {
-    return bytes[offset]; 
-}
 
 void RSSIAODVRouter::generateRREP(NodeNum destination_node, uint32_t route_request_id) {
     // 1. Create an RREPPacket 
@@ -395,14 +446,6 @@ void RSSIAODVRouter::generateRREP(NodeNum destination_node, uint32_t route_reque
     router.send(&packet); 
 }
 
-int8_t RSSIAODVRouter::getRSSIForNeighbor(NodeNum neighbor_id) {
-    auto it = neighbor_rssi_table.find(neighbor_id);
-    if (it != neighbor_rssi_table.end()) {
-        return it->second.rssi;  // Return the stored RSSI
-    } else {
-        return -120; // Or some default value to indicate neighbor not found
-    }
-}
 int8_t RSSIAODVRouter::getRSSI() {
     meshtastic_MeshPacket packet = getRecentPacketFromDatabase(); 
     return packet.rx_rssi; // Replace 'rx_rssi' with the actual field name
@@ -519,12 +562,11 @@ uint16_t RSSIAODVRouter::lookupHopCount(NodeNum destination_node) {
     if (route_entry != nullptr) {
         return route_entry->hop_count;
     } else {
-        // Handle the case where the route is not found
-        return 0; // Or another suitable default value 
+        return UINT16_MAX; // A special value to signal "route not found" 
     }
 }
 
-void RSSIAODVRouter::updateRouteTable(const RREPPacket &rrep, bool invalidate = false) {
+void RSSIAODVRouter::updateRouteTable(const RREPPacket &rrep, bool invalidate) {
     NodeNum destination_node = rrep.destination_node;
     NodeNum next_hop = rrep.source_node; 
     int8_t rssi = rrep.rssi;
@@ -560,10 +602,6 @@ void RSSIAODVRouter::updateRouteTable(const RREPPacket &rrep, bool invalidate = 
 //*************************************************************************
 // RREQ Handling Functions
 //*************************************************************************
-
-bool RSSIAODVRouter::isRREQSeen(uint32_t broadcast_id) {
-    return seen_rreq_ids.find(broadcast_id) != seen_rreq_ids.end(); 
-}
 
 void RSSIAODVRouter::rebroadcastRREQ(RREQPacket &rreq) {
     // 1. Check Rebroadcast Conditions
@@ -635,4 +673,65 @@ void RSSIAODVRouter::forwardRREP(const RREPPacket &rrep, NodeNum next_hop) {
 void RSSIAODVRouter::handleNewPacket(meshtastic_MeshPacket packet) {
     NodeNum sourceNode = packet.from; // Assuming you can get the source node 
     packetStore[sourceNode] = packet; // Store the packet
+}
+
+
+
+
+void RSSIAODVRouter::sendRSSIBeacon() {
+    // 1. Construct the RSSI Beacon Packet
+    meshtastic_MeshPacket packet;
+
+    // Set Destination (Broadcast)
+    packet.to = NODENUM_BROADCAST; 
+
+    // Set Port Number
+    packet.decoded.portnum = (meshtastic_PortNum) RSSI_BEACON_PORT;
+
+    // Encode RSSI 
+    int8_t my_rssi = getRSSI(); 
+    uint8_t *payload = serializeRSSI(my_rssi); // Keep your existing serialization for simplicity
+    size_t payload_size = sizeof(my_rssi);
+
+    // Populate Packet Payload
+    memcpy(packet.decoded.payload.bytes, payload, payload_size);
+    packet.decoded.payload.size = payload_size;
+
+    // 2. Send the Beacon Packet
+    router.send(&packet); 
+
+    // Schedule the next beacon using millis()
+    unsigned long now = millis();
+    this->nextBeaconTime = now + BEACON_INTERVAL; // Use a constant for readability
+}
+
+// Inside your main Meshtastic loop (or a periodically called function): 
+void RSSIAODVRouter::manageBeacons() {
+    unsigned long now = millis();
+    if (now >= nextBeaconTime) {
+        sendRSSIBeacon(); 
+    }
+}
+
+// Simple serialization for this example:
+uint8_t* RSSIAODVRouter::serializeRSSI(int8_t rssi) {
+    static uint8_t buffer[1];
+    buffer[0] = rssi; 
+    return buffer;
+}
+
+void RSSIAODVRouter::handleRSSIBeacon(const meshtastic_MeshPacket *p) {
+    // 1. Extract RSSI from the beacon packet
+    int8_t neighbor_rssi = deserializeRSSI(p->decoded.payload.bytes);
+
+    // 2. Extract the source node from the beacon
+    NodeNum neighbor_id = p->from;
+
+    // 3. Update Neighbor RSSI
+    updateNeighborRSSI(neighbor_id, neighbor_rssi, p); 
+}
+
+// Simple deserialization for this example:
+int8_t RSSIAODVRouter::deserializeRSSI(const uint8_t *payload) {
+    return (int8_t)payload[0];
 }
