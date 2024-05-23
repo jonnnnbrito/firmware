@@ -9,6 +9,7 @@
 #include "ReliableRouter.h"
 #include "airtime.h"
 #include "buzz.h"
+#include "RSSIAODVRouter.h"
 
 #include "error.h"
 #include "power.h"
@@ -580,8 +581,8 @@ void setup()
     nodeDB = new NodeDB;
 
     // If we're taking on the repeater role, use flood router and turn off 3V3_S rail because peripherals are not needed
-    if (config.device.role == meshtastic_Config_DeviceConfig_Role_REPEATER) {
-        router = new FloodingRouter();
+    if (config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_CLIENT) {
+        router = new RSSIAODVRouter();
 #ifdef PIN_3V3_EN
         digitalWrite(PIN_3V3_EN, LOW);
 #endif
