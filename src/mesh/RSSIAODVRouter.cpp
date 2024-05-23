@@ -8,7 +8,7 @@
 // ... (other necessary includes for logging, packet manipulation, etc.)
 
 RSSIAODVRouter::RSSIAODVRouter() {
-    LOG_INFO("[RSSIAODV] Hello World from RSSIAODVRouter!\n");
+    LOG_INFO("[RSSIAODV] Hello World from RSSIAODVRouter and Slotted ALOHA!\n");
 } 
 
 // Override from Router
@@ -41,12 +41,73 @@ void RSSIAODVRouter::sniffReceived(const meshtastic_MeshPacket *p, const meshtas
         LOG_DEBUG("[RSSIAODV] Discarding duplicate packet from node %u\n", p->from);
         return; 
     }
-/*
-    // Packet identification
-    if (p->which_payload_variant == meshtastic_MeshPacket_decoded_tag) { // Check if packet is decoded
+
+    if (p->which_payload_variant == meshtastic_MeshPacket_decoded_tag) {
         switch (p->decoded.portnum) {
             case meshtastic_PortNum_ROUTING_APP: { // Routing message
-                if (p->decoded.which_payload == meshtastic_Data_payload_routing_tag) {
-*/
+                // Check for correct payload type before accessing routing message
+                meshtastic_Routing routing = meshtastic_Routing_init_zero; 
+                pb_istream_t stream = pb_istream_from_buffer(p->decoded.payload.bytes, p->decoded.payload.size);
+                bool decoded = pb_decode(&stream, meshtastic_Routing_fields, &routing);
+
+                if (decoded) {
+                    switch (routing.which_variant) {
+                        case meshtastic_Routing_route_request_tag: { // RREQ
+                            if (routing.route_request.route_count < 8) {
+                                LOG_INFO("[RSSIAODV] Received RREQ from node %u to node %u\n", p->from, p->decoded.dest);
+                                // handleRREQ();
+                            } else {
+                                LOG_ERROR("[RSSIAODV] Invalid RREQ: Maximum hop count exceeded\n");
+                            }
+                            break;
+                        }
+
+                        case meshtastic_Routing_route_reply_tag: { // RREP
+                            if (routing.route_reply.route_count > 0) {
+                                LOG_INFO("[RSSIAODV] Received RREP from node %u to node %u\n", p->from, p->decoded.dest);
+                                // handleRREP();
+                            } else {
+                                LOG_ERROR("[RSSIAODV] Invalid RREP: Empty route\n");
+                            }
+                            break;
+                        }
+
+                        case meshtastic_Routing_error_reason_tag: {  // RERR
+                            LOG_WARN("[RSSIAODV] Received RERR: %d\n", routing.error_reason);
+                            // handleRERR()
+                            break;
+
+                        default:
+                            if (p->decoded.portnum == meshtastic_PortNum_RSSIAODV_HELLO) {
+                                HelloMessage hello;
+                                if (decodeHelloMessage(p->decoded.payload.bytes, p->decoded.payload.size, &hello)) {
+                                    // handleHELLO();
+                                } else {
+                                    LOG_ERROR("[RSSIAODV] Failed to decode Hello message.\n");
+                                }
+                            } else {
+                                LOG_DEBUG("[RSSIAODV] Received message with portnum: %d\n", p->decoded.portnum);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
     Router::sniffReceived(p, c);
+}
+
+bool RSSIAODVRouter::decodeHelloMessage(const uint8_t *data, size_t data_length, HelloMessage *hello) {
+    if (data_length < sizeof(HelloMessage)) {
+        LOG_ERROR("[RSSIAODV] Invalid Hello message length: %u\n", data_length);
+        return false;
+    }
+
+    // Extract fields from the byte array (assuming little-endian byte order)
+    hello->sender = *(NodeNum*)(data);
+    hello->rssi = *(int8_t*)(data + sizeof(NodeNum));
+    // ... decode other fields in HelloMessage based on your encoding logic
+
+    return true;
 }

@@ -6,6 +6,12 @@
 #include <unordered_map>
 
 
+struct HelloMessage {
+    NodeNum sender;        // Node ID of the sender
+    int8_t rssi;           // RSSI value (obtain this from the MeshPacket)
+    // ... Add any other relevant information you want to include 
+};
+
 struct RoutingEntry {
     NodeNum destination;
     NodeNum nextHop;
@@ -23,8 +29,7 @@ public:
     virtual bool shouldFilterReceived(const meshtastic_MeshPacket *p) override;
     virtual void sniffReceived(const meshtastic_MeshPacket *p, const meshtastic_Routing *c) override;
 
-    bool decodeRoutingMessage(const uint8_t *data, size_t data_length, meshtastic_Routing *routing);
-
+    bool decodeHelloMessage(const uint8_t *data, size_t data_length, HelloMessage *hello);
 protected:
     NodeDB* nodeDB;
 
