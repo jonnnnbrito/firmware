@@ -12,6 +12,8 @@
 #include <pb_decode.h>
 #include <pb_encode.h>
 
+
+
 #define RDEF(name, freq_start, freq_end, duty_cycle, spacing, power_limit, audio_permitted, frequency_switching, wide_lora)      \
     {                                                                                                                            \
         meshtastic_Config_LoRaConfig_RegionCode_##name, freq_start, freq_end, duty_cycle, spacing, power_limit, audio_permitted, \
@@ -237,13 +239,30 @@ uint32_t RadioInterface::getRetransmissionMsec(const meshtastic_MeshPacket *p)
 /** The delay to use when we want to send something */
 uint32_t RadioInterface::getTxDelayMsec()
 {
-    /** We wait a random multiple of 'slotTimes' (see definition in header file) in order to avoid collisions.
-    The pool to take a random multiple from is the contention window (CW), which size depends on the
-    current channel utilization. */
+    // Calculate delay to align with the next available slot (Decentralized)
+    uint32_t currentTime = millis();
+    uint32_t nextSlot = (currentSlot + 1) % SLOTS_PER_FRAME; 
+    uint32_t baseDelay = nextSlot * SLOT_DURATION_MS - (currentTime % (SLOT_DURATION_MS * SLOTS_PER_FRAME));
+
+    LOG_DEBUG("[SLOTTED ALOHA] ----- Current time: %u ms, Next slot: %u, Base delay: %u ms \n", currentTime, nextSlot, baseDelay);  // Log timing details
+
+    // Incorporate contention window (CW) for additional collision avoidance
     float channelUtil = airTime->channelUtilizationPercent();
     uint8_t CWsize = map(channelUtil, 0, 100, CWmin, CWmax);
-    // LOG_DEBUG("Current channel utilization is %f so setting CWsize to %d\n", channelUtil, CWsize);
-    return random(0, pow(2, CWsize)) * slotTimeMsec;
+    uint32_t randomBackoff = (random(0, pow(2, CWsize)) * slotTimeMsec) / 2; 
+
+    LOG_DEBUG("[SLOTTED ALOHA] ----- Channel utilization: %.2f%%, CW size: %u, Random backoff: %u ms \n", channelUtil, CWsize, randomBackoff);  // Log CW details
+
+    uint32_t totalDelay = baseDelay + randomBackoff;
+    if (totalDelay > baseDelay) {
+        LOG_DEBUG("[SLOTTED ALOHA] ----- Transmission delayed due to backoff. Total delay: %u ms \n", totalDelay); 
+    } else {
+        LOG_DEBUG("[SLOTTED ALOHA] ----- Node ID: 0x%X, Assigned Slot: %u, Scheduled for next slot. Total delay: %u ms \n", nodeDB->getNodeNum(), currentSlot, totalDelay);
+        retransmission_counter++;
+        LOG_DEBUG("[RETRANSMISSION RATE] ----- %u", retransmission_counter);
+    }
+
+    return totalDelay; 
 }
 
 /** The delay to use when we want to flood a message */
@@ -347,6 +366,8 @@ bool RadioInterface::init()
     // constructor time.
 
     applyModemConfig();
+
+    currentSlot = nodeDB->getNodeNum() % SLOTS_PER_FRAME; 
 
     return true;
 }

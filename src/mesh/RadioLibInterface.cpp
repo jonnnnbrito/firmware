@@ -8,6 +8,7 @@
 #include "mesh-pb-constants.h"
 #include <pb_decode.h>
 #include <pb_encode.h>
+#include "RadioInterface.h"
 
 void LockingArduinoHal::spiBeginTransaction()
 {
@@ -96,7 +97,8 @@ bool RadioLibInterface::canSendImmediately()
             rebootAtMsec = lastTxStart + 65000;
         }
         if (busyRx) {
-            LOG_WARN("Can not send yet, busyRx\n");
+            LOG_WARN("Cannot send yet, busyRx. Message will be queued in Slotted ALOHA.\n");
+            collision_counter++;
         }
         return false;
     } else
@@ -138,7 +140,11 @@ ErrorCode RadioLibInterface::send(meshtastic_MeshPacket *p)
 #ifndef LORA_DISABLE_SENDING
     printPacket("enqueuing for send", p);
 
-    LOG_DEBUG("txGood=%d,rxGood=%d,rxBad=%d\n", txGood, rxGood, rxBad);
+    LOG_DEBUG("[Packet Delivery Ratio] ----- txGood=%d,rxGood=%d,rxBad=%d\n", txGood, rxGood, rxBad);
+    LOG_DEBUG("[Packet Delivery Ratio] ----- %f%% \n", ((float)(rxGood - rxBad) / txGood) * 100.0);
+    uint8_t collision_rate = (collision_counter / (collision_counter + txGood)) * 100.0;
+    LOG_DEBUG("[Collision Rate] ----- %f%% \n", collision_rate);
+    
     ErrorCode res = txQueue.enqueue(p) ? ERRNO_OK : ERRNO_UNKNOWN;
 
     if (res != ERRNO_OK) { // we weren't able to queue it, so we must drop it to prevent leaks
@@ -293,6 +299,8 @@ void RadioLibInterface::handleTransmitInterrupt()
     // ignore the transmit interrupt
     if (sendingPacket)
         completeSending();
+    isTransmitting = false;  // Set isTransmitting to false after transmission completes
+    LOG_DEBUG("[SLOTTED ALOHA] ----- isTransmitting: FALSE \n");
 }
 
 void RadioLibInterface::completeSending()
@@ -379,6 +387,31 @@ void RadioLibInterface::handleReceiveInterrupt()
             memcpy(mp->encrypted.bytes, payload, payloadLen);
             mp->encrypted.size = payloadLen;
 
+
+
+            // Collision Detection and Random Backoff (Decentralized Slotted ALOHA)
+            if (isTransmitting) {
+                uint32_t currentTime = millis();
+                uint32_t timeSinceStartOfFrame = currentTime % (SLOT_DURATION_MS * SLOTS_PER_FRAME); // Time elapsed within the current frame
+                uint32_t slotStartTime = currentSlot * SLOT_DURATION_MS;
+                uint32_t slotEndTime = slotStartTime + SLOT_DURATION_MS;
+
+                // Check if received timestamp falls within the current node's transmission slot
+                if (timeSinceStartOfFrame >= slotStartTime && timeSinceStartOfFrame < slotEndTime) {
+                    // Collision detected, backoff for a random number of slots
+                    uint32_t backoffSlots = random(1, MAX_BACKOFF_SLOTS + 1);
+                    currentSlot = (currentSlot + backoffSlots) % SLOTS_PER_FRAME; 
+                    LOG_DEBUG("[SLOTTED ALOHA] ----- Node ID: 0x%X, Collision detected in slot: %u, backing off for %u slots \n", nodeDB->getNodeNum(), currentSlot, backoffSlots);
+
+                    // Since there's a collision, return early without processing the packet further
+                    packetPool.release(mp); // Release the allocated packet back to the pool
+                    return; 
+                } else {
+                    LOG_DEBUG("[SLOTTED ALOHA] ----- Node ID: 0x%X, No collision detected in slot: %u. Received packet at time: %u ms\n", nodeDB->getNodeNum(), currentSlot, timeSinceStartOfFrame);
+                }
+            }
+
+
             printPacket("Lora RX", mp);
 
             airTime->logAirtime(RX_LOG, xmitMsec);
@@ -391,6 +424,8 @@ void RadioLibInterface::handleReceiveInterrupt()
 /** start an immediate transmit */
 void RadioLibInterface::startSend(meshtastic_MeshPacket *txp)
 {
+    isTransmitting = true;  
+    LOG_DEBUG("[SLOTTED ALOHA] ----- isTransmitting: TRUE\n");
     printPacket("Starting low level send", txp);
     if (disabled || !config.lora.tx_enabled) {
         LOG_WARN("startSend is dropping tx packet because we are disabled\n");

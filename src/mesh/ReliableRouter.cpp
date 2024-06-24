@@ -33,7 +33,7 @@ ErrorCode ReliableRouter::send(meshtastic_MeshPacket *p)
         }
     }
 
-    return FloodingRouter::send(p);
+    return RSSIAODVRouter::send(p);
 }
 
 bool ReliableRouter::shouldFilterReceived(const meshtastic_MeshPacket *p)
@@ -83,7 +83,7 @@ bool ReliableRouter::shouldFilterReceived(const meshtastic_MeshPacket *p)
         Router::send(tosend);
     }
 
-    return FloodingRouter::shouldFilterReceived(p);
+    return RSSIAODVRouter::shouldFilterReceived(p);
 }
 
 /**
@@ -134,7 +134,7 @@ void ReliableRouter::sniffReceived(const meshtastic_MeshPacket *p, const meshtas
     }
 
     // handle the packet as normal
-    FloodingRouter::sniffReceived(p, c);
+    RSSIAODVRouter::sniffReceived(p, c);
 }
 
 #define NUM_RETRANSMISSIONS 3
@@ -229,7 +229,7 @@ int32_t ReliableRouter::doRetransmissions()
 
                 // Note: we call the superclass version because we don't want to have our version of send() add a new
                 // retransmission record
-                FloodingRouter::send(packetPool.allocCopy(*p.packet));
+                RSSIAODVRouter::send(packetPool.allocCopy(*p.packet));
 
                 // Queue again
                 --p.numRetransmissions;

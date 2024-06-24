@@ -58,9 +58,13 @@ class RadioLibInterface : public RadioInterface, protected concurrency::Notified
      */
     uint32_t rxBad = 0, rxGood = 0, txGood = 0;
 
+    
+
     MeshPacketQueue txQueue = MeshPacketQueue(MAX_TX_QUEUE);
 
   protected:
+    int collision_counter;
+    bool isTransmitting = false; // Add the isTransmitting flag
     /**
      * We use a meshtastic sync word, but hashed with the Channel name.  For releases before 1.2 we used 0x12 (or for very old
      * loads 0x14) Note: do not use 0x34 - that is reserved for lorawan
@@ -90,6 +94,8 @@ class RadioLibInterface : public RadioInterface, protected concurrency::Notified
     /** Our ISR code currently needs this to find our active instance
      */
     static RadioLibInterface *instance;
+
+    int getTxGood() const { return txGood; }
 
     /**
      * Glue functions called from ISR land

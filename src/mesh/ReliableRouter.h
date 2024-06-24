@@ -1,6 +1,6 @@
 #pragma once
 
-#include "FloodingRouter.h"
+#include "RSSIAODVRouter.h"
 #include <unordered_map>
 
 /**
@@ -51,7 +51,7 @@ class GlobalPacketIdHashFunction
 /**
  * This is a mixin that extends Router with the ability to do (one hop only) reliable message sends.
  */
-class ReliableRouter : public FloodingRouter
+class ReliableRouter : public RSSIAODVRouter
 {
   private:
     std::unordered_map<GlobalPacketId, PendingPacket, GlobalPacketIdHashFunction> pending;
@@ -76,7 +76,7 @@ class ReliableRouter : public FloodingRouter
         // Note: We must doRetransmissions FIRST, because it might queue up work for the base class runOnce implementation
         auto d = doRetransmissions();
 
-        int32_t r = FloodingRouter::runOnce();
+        int32_t r = RSSIAODVRouter::runOnce();
 
         return min(d, r);
     }
@@ -94,7 +94,7 @@ class ReliableRouter : public FloodingRouter
     PendingPacket *findPendingPacket(GlobalPacketId p);
 
     /**
-     * We hook this method so we can see packets before FloodingRouter says they should be discarded
+     * We hook this method so we can see packets before RSSIAODVRouter says they should be discarded
      */
     virtual bool shouldFilterReceived(const meshtastic_MeshPacket *p) override;
 

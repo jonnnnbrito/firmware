@@ -16,6 +16,11 @@
 #define PACKET_FLAGS_HOP_START_MASK 0xE0
 #define PACKET_FLAGS_HOP_START_SHIFT 5
 
+// Constants for Slotted ALOHA
+#define SLOT_DURATION_MS 50000
+#define SLOTS_PER_FRAME 15
+#define MAX_BACKOFF_SLOTS 5
+
 /**
  * This structure has to exactly match the wire layout when sent over the radio link.  Used to keep compatibility
  * with the old radiohead implementation.
@@ -97,6 +102,13 @@ class RadioInterface
     /** pool is the pool we will alloc our rx packets from
      */
     RadioInterface();
+
+    uint32_t currentSlot = 0;
+    uint32_t lastBeaconTime = 0;
+    bool isBeaconNode = false;  // Set this to true for the designated beacon node
+
+    uint32_t retransmission_counter;
+    
 
     virtual ~RadioInterface() {}
 

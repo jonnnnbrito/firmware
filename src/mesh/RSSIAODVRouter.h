@@ -2,6 +2,7 @@
 
 #include "PacketHistory.h"
 #include "Router.h"
+#include <map>
 
 /**
  * This is a mixin that extends Router with the ability to do Naive Flooding (in the standard mesh protocol sense)
@@ -26,15 +27,29 @@
   Any entries in recentBroadcasts that are older than X seconds (longer than the
   max time a flood can take) will be discarded.
  */
-class FloodingRouter : public Router, protected PacketHistory
+
+struct RoutingTableEntry {
+    NodeNum destination;       // Destination node ID
+    NodeNum next_hop;           // Next hop node ID to reach destination
+    int hopCount;              // Number of hops to reach destination
+    int seqNum;                // Sequence number (for AODV)
+    int rssi;                  // RSSI value for the route
+    time_t lifetime;           // Time the route is valid (optional)
+};
+
+class RSSIAODVRouter : public Router, protected PacketHistory
 {
   private:
+  std::map<uint32_t, RoutingTableEntry> rebroadcastRoutingTable;
+  std::map<uint32_t, RoutingTableEntry> ackRoutingTable;
+  int mySeqNum;
+
   public:
     /**
      * Constructor
      *
      */
-    FloodingRouter();
+    RSSIAODVRouter();
 
     /**
      * Send a packet on a suitable interface.  This routine will
@@ -56,4 +71,13 @@ class FloodingRouter : public Router, protected PacketHistory
      * Look for broadcasts we need to rebroadcast
      */
     virtual void sniffReceived(const meshtastic_MeshPacket *p, const meshtastic_Routing *c) override;
+    bool isInRebroadcastRoutingTable(NodeNum destination, int rssiThreshold);
+    bool forRREP(const meshtastic_MeshPacket *p);
+    bool forRREQ(const meshtastic_MeshPacket *p);
+    void updateAckRoutingTable(const meshtastic_MeshPacket *p, int rssi);
+    void updateRebroadcastRoutingTable(uint32_t neighborId, int rssi);
+    void sendRREP(NodeNum destination, int rssi, const meshtastic_MeshPacket *originalRREQ);
+    void rebroadcastRREQToNeighborsWithSufficientRSSI(const meshtastic_MeshPacket *p);
+    void printRebroadcastRoutingTable();
+    void printAckRoutingTable();
 };
